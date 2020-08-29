@@ -1,0 +1,87 @@
+---
+title: "6371_Homework 1"
+author: "John Olanipekun"
+date: "8/29/2020"
+output: html_document
+---
+
+```{r}
+
+SMU = c(34, 1200, 23, 50, 60, 50, 0, 0, 30, 89, 0, 300, 400, 20, 10, 0)
+Seattle = c(20, 10, 5, 0, 30, 50, 0, 100, 110, 0, 40, 10, 3, 0)
+total=length(SMU) + length(Seattle)
+
+
+par(mfrow = c(1,2))
+smuh = hist(SMU)
+seattleh = hist(Seattle)
+#Welch T-test
+cash_ttest1 <- t.test(SMU, Seattle, alternative = "two.sided", var.equal = FALSE)
+
+
+```
+
+Now let us do it the permutation way
+
+```{r}
+#create data frame to work with
+cash_df = data.frame(Cash = c(SMU,Seattle), Treatment = c(rep(1,16),rep(2,14)))
+cash_df
+
+
+# generate the difference in means a pvalue to compare with later
+cash_ttest <- t.test(cash_df$Cash ~ cash_df$Treatment, alternative = "two.sided", var.equal = FALSE)
+cash_ttest
+
+# number of permutations
+set.seed(123)
+number_of_permutations = 10000;
+#This will hold the difference of sample means generated under the assumption of equality
+xbarholder = c();
+
+# this is the observed difference in sample means that we observed.. is the same the one from t.test above. 
+observed_diff = mean(subset(cash_df, Treatment == 1)$Cash)-mean(subset(cash_df, Treatment == "2")$Cash)
+
+# This counts the number of differences of sample means from each permutation that were more extreme than the one observed (difference from t.test above)
+counter = 0;
+
+# this loop run all the permutations and generates and remembers the difference of sample means for each permutation of the labels ... 
+# remember, the reason we can permute the labels is because we are assuming the null hypothesis to be true... that the means are 
+# equal under and thus that the treatment has no effect.  That is, that the result we saw for an individual would have been just as 
+#likely to have happened if he or she were in the other group / treatment."
+
+for(i in 1:number_of_permutations)
+{
+  population_obs = sample(cash_df$Cash,total); #shuffle the observations
+  # the below two lines effectively randomly assigns values to the observations. 
+  Group_One = population_obs[1:16]; # give the first 5 data
+  Group_Two = population_obs[17:total]; #give the rest. 
+  diff = mean(Group_One)-mean(Group_Two); # find the difference in sample means from current permutation. under the equality assumption, most of the time this should be close to zero
+  xbarholder[i] = diff; # remember the difference in sample means to compare to the one we observed in the study... 
+  
+  #if the one we observed sticks out then it will be hard to for the diffs to exceed it and that will be evidence that is doesn't 
+  #belong and thus is evidence that the difference is not zero and thus that the means are not equal and thus that there is a 
+  #treatment effect. 
+  
+  #evidence that the means are not equal, abs() appends both +ve and -ve values so it is a two-tailed test 
+  if(abs(diff) > abs(observed_diff)) 
+    counter = counter + 1;
+  
+}
+hist(xbarholder);
+counter
+cash_pvalue = counter / number_of_permutations; 
+cash_pvalue # 0.144 which is higher than the probability that the alternative hypothesis is correct.
+# the pvalue is the percentage of the differences in sample means that were generated under 
+#the assumption of equal means exceed the one we observed.  If this percentage is small, then this is evidence that the observed 
+#difference does not belong in this distribution and thus that the difference is not zero and thus that the means are not equal and thus that there is a 
+#treatment effect.
+hist(Group_One)
+hist(Group_Two)
+
+```
+
+The null hypothesis states that the means are equal and the p-values are far higher than the significance level of 0.05, therefore we have good statistical evidence to NOT reject the null hypothesis. Therefore, I don’t think this translates to accepting the null hypothesis either, we just need look into the issue.
+
+We simply cannot establish whether there is a difference or not in the means of pocket cash of students in SMU and those in Seattle. Were the data normally distributed and p-value much lower than the alpha (0.05), we would have enough evidence to establish that there is considerable difference in the means of the pocket cash held by student in these institutions.
+One of the conditions for running the hypothesis test is that the data approach normal distribution. The mean differences are not normally distributed but bi-modal. Therefore the p-values and t-test values are suspect.
