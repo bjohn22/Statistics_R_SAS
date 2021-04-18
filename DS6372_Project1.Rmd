@@ -1,0 +1,908 @@
+---
+title: "DS6372 Project 1"
+author: "Carl Keusseyan, John Olan, Feby Thomas"
+date: "1/31/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1. Read in the data
+
+2. EDA 
+    a. Deal with missing data - analyze and document how we deal with it
+    b. Examine the data - boxplots, Min, Max, look for outliers
+    c. deal with columns that are Factors - turn them into levels
+    d. Scatter plot matrix to see if there is a relationship between any 2 variables
+        This gives us an idea on the model
+        
+3. Fit a preliminary linear model to the entire data set.
+
+4. If residual plot shows non-constant variance, use weighted linear regression
+        
+5. Split the data into 80% train, 10% test and 10% validation
+   First go for a simple model (no interaction terms or quadratics) using the train set, predict and compare to the test set, and then validate.
+   
+  
+6. Fit the model using Single tree, prune as it may.
+
+7. Fit to random forest. Grid search parameters.
+
+8. Fit using lasso regularization. Grid search parameters.
+
+9. Tabulate all the Test RMSEs to see which is lowest.
+   
+
+```{r}
+#load all necessary libraries
+library(tseries)
+library(forecast)
+library(ggplot2)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(GGally)
+library(naniar)
+library(XML)
+library(stringi)
+library(class)
+library(caret)
+library(e1071)
+library(ISLR)
+#library(XLConnect)
+library(jtools)
+library(broom)
+library(broom.mixed)
+library(olsrr)
+library(mvinfluence)
+library(glmnet)
+library(MASS)
+
+```
+
+
+```{r}
+#set Working directory
+setwd("C:/Users/olani/OneDrive/Documents/Data Science/SMU-Data Science/Applied Statistics/Project1Details_2021/Project1Details_2021")
+
+#REad in the CSV file
+car.new<-read.csv("data1.csv")
+attach(car.new)
+
+#examine the newly rad in dataset car.new
+head(car.new)
+str(car.new)
+```
+
+```{r}
+### Deal with Missing Data
+
+#let us plot what variable are missing
+gg_miss_var(car.new)  
+
+# we can see the missing data 
+#     Engine HP around about 70 values
+#     Engine Cylinders about 30 values
+#      Number of doors about 5
+
+# Display the number of rows anc columns
+dim(car.new)  # we know we have 11914 rows of data with 16 columns
+
+# removing the Market.category column because it has too many N/As  - 3600 rows are missing this value, and this amount of lack of data will compromise our analysis and the model.  At this point we are going to take it out.
+
+car.new <- subset(car.new, select =-c(Market.Category))
+
+str(car.new)
+```
+
+###Feature Engineering
+####convert features to factors
+```{r Feature_Eng}
+##Convert relevant features to factors
+car.new1 <- car.new %>%
+    mutate(Make = as.factor(Make),
+           Popularity = as.factor(Popularity),
+           Model = as.factor(Model),
+           Vehicle.Size = as.factor(Vehicle.Size),
+           Vehicle.Style = as.factor(Vehicle.Style),
+           Number.of.Doors = as.factor(Number.of.Doors),
+           Driven_Wheels = as.factor(Driven_Wheels),
+           Transmission.Type=as.factor(Transmission.Type),
+           Engine.Cylinders = as.factor(Engine.Cylinders),
+           Engine.Fuel.Type = as.factor(Engine.Fuel.Type))
+
+str(car.new1)
+#list of level in Make. I can't merge the make to reduce the levels. They are different.
+make <- unique(car.new1$Make)
+make
+
+
+
+
+```
+
+
+###EDA
+```{r Visualization}
+
+#plot some viz
+#Model versus MSRP. No trend transformed or not
+##
+
+car.new1 %>% group_by(Model) %>% summarise(MSRP_Median = median(MSRP)) %>%
+  arrange(desc(MSRP_Median)) %>%
+  ggplot(aes(x=Model, y = log(MSRP_Median))) +
+  geom_point() +
+  geom_text(aes(label=Model),hjust=0.5, vjust=-0.5) + #this line adds label to the datapoints so I can where the outliers come from
+  theme(axis.text.x = element_blank()) + 
+  xlab("Model") + 
+  ggtitle("Model/Price")
+
+
+
+#Make and MSRP
+#High leverage from the very expensive vehicles
+#remove or keep @ MSRP> USD$100,000?
+
+#The primary objective for this EDA section is to identify the varibles that have association with MSRP (the response)
+#The code below serves as template. So I just changed out the variables as needed, to view their relationship.
+
+car.new1 %>% group_by(Make) %>% summarise(MSRP_Median = median(MSRP)) %>%
+  arrange(desc(MSRP_Median)) %>%
+  ggplot(aes(x = Make, y = (MSRP_Median))) +
+  geom_point() +
+  geom_text(aes(label=Make),hjust=0.5, vjust=-0.5) + #this line adds label to the datapoints so I can where the outliers come from
+  theme(axis.text.x = element_blank()) + 
+  xlab("Make") + 
+  ggtitle("Make/Price")
+
+
+
+```
+
+
+
+###Post-EDA 1
+```{r}
+
+#I subset out the highly expensive cars that have high leverage and are 'outliers'.
+
+car_nonEx <-  car.new %>%
+    filter(MSRP< 100000)
+```
+
+
+
+###exclude missing values
+```{r}
+car_nonEx <- car_nonEx[complete.cases(car_nonEx),]  #exclude NA and missing data
+
+
+```
+
+
+
+###Feature engineering and EDA 2
+```{r}
+
+car_nonEx <- car_nonEx %>%
+    mutate(Make = as.factor(Make),
+           Popularity = as.factor(Popularity),
+           Model = as.factor(Model),
+           Vehicle.Size = as.factor(Vehicle.Size),
+           Vehicle.Style = as.factor(Vehicle.Style),
+           Number.of.Doors = as.factor(Number.of.Doors),
+           Driven_Wheels = as.factor(Driven_Wheels),
+           Transmission.Type=as.factor(Transmission.Type),
+           Engine.Cylinders = as.factor(Engine.Cylinders),
+           Engine.Fuel.Type = as.factor(Engine.Fuel.Type))
+
+
+#Vehicle style has some levels that can be merged without losing info.
+#Below is to replace "4Dr SUV" and "2Dr SUV" with "SUV", given that 4Dr and 2Dr are already captured in Number.of.Doors column.
+
+car_nonEx.new <- car_nonEx %>%
+    mutate(Veh.Style_recode1 = Vehicle.Style)
+
+
+
+car_nonEx.new$Veh.Style_recode = str_replace_all(as.character(car_nonEx.new$Veh.Style_recode), "2dr SUV", "SUV")
+car_nonEx.new$Veh.Style_recode = str_replace_all(as.character(car_nonEx.new$Veh.Style_recode), "4dr SUV", "SUV")
+
+car_nonEx.new$Veh.Style_recode = as.factor(car_nonEx.new$Veh.Style_recode)
+
+#how does it look now.
+str(car_nonEx.new)
+```
+
+
+
+
+
+
+```{r}
+#View result
+
+#reorder argument with arrange the levels in ascending other, which makes it easy to view the trend. 
+#This is also a utility code chunk that I was adapting for different plots of different variables. 
+
+
+car_nonEx %>% 
+  #group_by(Make) %>% summarise(MSRP_Median = median(MSRP)) %>%
+  #arrange(desc(MSRP_Median)) %>%
+  #ggplot(aes(x = reorder(Make,-MSRP_Median), y = MSRP_Median, fill = Engine.Cylinders)) +
+  ggplot(aes(x = reorder(Make,-MSRP), y = MSRP, fill = as.factor(Engine.Cylinders))) +
+  geom_bar(stat="identity") +
+  #geom_text(aes(label=Make),hjust=0.5, vjust=-0.5) + 
+  #theme(axis.text.x = element_blank(angle = 45)) + 
+  xlab("Make") + 
+  ggtitle("Make/Price")
+
+
+#Vehicle.Style had 16 variables with some that a redundant.
+car_nonEx.new %>% 
+  group_by(Veh.Style_recode) %>% summarise(MSRP_Median = median(MSRP)) %>%
+  #arrange(desc(MSRP_Median)) %>%
+  #ggplot(aes(x = reorder(Make,-MSRP_Median), y = MSRP_Median, fill = Engine.Cylinders)) +
+  ggplot(aes(x = reorder(Veh.Style_recode,-MSRP_Median), y = MSRP_Median)) +
+  geom_bar(stat="identity") +
+  #geom_text(aes(label=Make),hjust=0.5, vjust=-0.5) + #this line adds label to the datapoints so I can where the outliers come from
+  #theme(axis.text.x = element_blank(angle = 45)) + 
+  #xlab("Make") + 
+  ggtitle("Make/Price")
+
+
+#View names of levels that makes up the factor
+unique(car_nonEx.new$Veh.Style_recode)
+
+
+colSums(is.na(car_nonEx.new))
+```
+
+
+
+
+##EDA-3
+```{r}
+
+#For a pairwise view of plots
+#My plan was to view a set 5 or 6 features at a time instead of the whole thing.
+#I played with log, squared of the variables as I.
+#these plots show that city.MPG and Highway MPG do not show any considerable association with MSRP.
+#Make and model do not have meaningful association with the MSRP below 100000.
+
+library(GGally)
+#Pairwise plots
+df2.new <- car_nonEx.new %>%
+    mutate(log.MSRP = log(MSRP),
+          sq.Engine.HP=(Engine.HP)^2) %>%
+    dplyr::select(c(MSRP, Driven_Wheels, Transmission.Type, Number.of.Doors, Vehicle.Size, Veh.Style_recode))
+
+df2.raw <- car_nonEx %>%
+        dplyr::select(c(MSRP, Engine.Cylinders, Engine.Fuel.Type, Year,highway.MPG, city.mpg, Engine.HP, Number.of.Doors))
+
+
+pairs(df2.raw)
+ggpairs(df2.raw)
+
+#what levels are in fuel type
+unique(car_nonEx$Engine.Cylinders)
+str(car_nonEx)
+view(car_nonEx$Engine.Fuel.Type)
+
+#Grouped plot
+car_nonEx %>% 
+  group_by(Engine.Fuel.Type) %>% 
+  #summarise(MSRP_Median = median(MSRP)) %>%
+  #arrange(desc(MSRP_Median)) %>%
+  ggplot(aes(x = reorder(Engine.Fuel.Type,-MSRP), y = MSRP)) +
+  geom_boxplot() +
+  #geom_text(aes(label=Make),hjust=0.5, vjust=-0.5) + #this line adds label to the datapoints so I can where the outliers come from
+  #theme(axis.text.x = element_blank(angle = 45)) + 
+  xlab("Fuel type") + 
+  ggtitle("Fuel type/Price")
+
+
+#correlation of the selected variables
+
+df2.raw %>% ggcorr(palette = "RdBu", label = TRUE, hjust= 0.9, layout.exp = 1.2, name = "Spearman correlation coeff. (ρ)")
+
+#No association with City MPG/highway MPG so drop from model.
+
+
+#MSRP histogram to see MSRP distribution. There was some very very cheap cars 0 to 5000 that are seriously skewing the result.
+car_nonEx.new %>% 
+  ggplot(aes(x =MSRP)) +
+  geom_histogram() +
+  #xlab("Fuel type") + 
+  ggtitle("MSRP")
+
+
+car_v.cheap = car_nonEx.new %>% filter(MSRP<5000)
+car_nonEx.new = car_nonEx.new %>% filter(MSRP >=5000)
+
+
+```
+
+There is no association of MSRP with City MPG nor Highway MPG
+
+
+```{r}
+plot( MSRP~(highway.MPG), data = car_nonEx)
+```
+
+
+##Multiple linear regression
+```{r}
+##Fit a preliminary model using the variables that have some association with MSRP
+
+
+Model1<- lm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Number.of.Doors+Vehicle.Size+Veh.Style_recode+Engine.Fuel.Type, data=car_nonEx.new)
+summary(Model1)                    
+
+
+par(mfrow=c(2,2))
+plot(Model1)
+plot(cooks.distance(Model1))
+#Cooks D shows outliers but they don't have strong leverage. 90 % of the residuals are within -2 to +2 and have random cloud  and relative constant variance.
+
+
+
+car::vif(Model1) # Variance Inflation Factor (anything above 10 is a problem)
+#there is high multicollinearity with Vehicle style and number of doors.
+# even though removing it does not have any significant effect on the model, they should be removed in other to see the actual predictors contributing to the effect sizes.
+
+
+#below the revised model following removal of multicollinear predictors
+
+
+
+Model1.new<- lm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type, data=car_nonEx.new, )
+summary(Model1.new) 
+par(mfrow=c(2,2))
+plot(Model1.new)
+plot(cooks.distance(Model1.new))
+
+
+str(car_nonEx.new)
+
+
+#Evaluation metrics for the model:
+#Root Mean Squared Error
+Root_MSE = sqrt(mean(Model1$residuals^2)) #0.19 which is very low and very good
+Root_MSE_B = sqrt(mean(Model1.new$residuals^2)) #0.205
+
+
+```
+
+##Observations:
+1. The vif output reveals high multicollinearity in Veh.Style_recode, Number.of.Doors and Engine.Fuel.Type predictors. The first two were the most severe (266 and 58 respectively).
+2. When these 3 predictors were removed from the model the adjusted Rsqured dropped from 0.78 to 0.69 and the RMSE increased from 0.205 to 0.235. 
+3. Given this poor performance, I returned the Engine.Fuel.Type predictor given its mildly multicollinear value. Then the adjusted r-squared increased to 0.76 and RMSE shows 0.205 which is similar to what was obtained for the original full model. But now we can explain that the predictors in this model are contributing to the effect size seeing in the response.   
+
+
+
+
+
+#Weighted least squares regression
+Calculate fitted values from a regression of absolute residuals vs fitted values.
+
+```{r}
+library (MASS)
+
+Weighted_fit <- rlm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type, data=car_nonEx.new)
+
+
+plot(fitted(Weighted_fit), residuals(Weighted_fit))
+
+##A bit of non-constant variance here so let use weighted to see if there will be improvement.
+
+wts <- 1/fitted(lm(abs(residuals(Weighted_fit)) ~ fitted(Weighted_fit)))^2
+
+Weighted_fit1 <- rlm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type, data=car_nonEx.new, weights = wts)
+
+Root_MSE_B1 = sqrt(mean(Weighted_fit$residuals^2))
+
+```
+
+
+Transform the MSRP (response) to log for better distribution. It showed better correlation with Engine.HP
+
+```{r}
+
+
+car_nonEx.newB = car_nonEx.new %>%
+  mutate(MSRP.log = log(MSRP))
+car_nonEx.newB = subset(car_nonEx.newB, select=-c(MSRP))
+
+
+
+car_nonEx.newB = subset(car_nonEx.newB, select=-c(Veh.Style_recode1,MSRP))
+
+
+car_nonEx.newB =car_nonEx.newB %>%
+  mutate(Year = as.factor(Year))
+
+#verify the result
+ncol(car_nonEx.newB)
+str(car_nonEx.newB)
+```
+
+
+#Split section for the linear model
+
+```{r}
+
+attach(car_nonEx.newB)
+
+
+
+set.seed(123)
+splitPerc = .80
+splitPerc2 = .50
+trainIndices1 = sample(1:dim(car_nonEx.newB)[1],round(splitPerc * dim(car_nonEx.newB)[1]))
+train1 = car_nonEx.newB[trainIndices1,]
+test_val1 = car_nonEx.newB[-trainIndices1,]
+
+trainIndices1 = sample(1:dim(test_val1)[1],round(splitPerc2 * dim(test_val1)[1]))
+test1 = test_val1[trainIndices1,]
+validation1 = test_val1[-trainIndices1,]
+dim(car_nonEx.newB)
+dim(train1)
+dim(test1)
+dim(validation1)
+
+```
+
+#Fit the regression model using the "train" split.
+This model used the selected predictors used in the full dataset above
+
+```{r}
+
+model_2 = lm(MSRP.log~(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type+Year, data=train1)
+
+
+
+Root_MSE_2.train = sqrt(mean(model_2$residuals^2)) #0.19 which is very low and very good
+
+
+
+MSE_2.test = mean((test1$MSRP.log - predict.lm(model_2, test1))^2)
+Root_MSE_2.test = sqrt(MSE_2.test) #This test RMSE is the best technique for evaluating a model. But it looks high on this model.
+
+
+#For weighted Linear Regression
+
+Weighted_fit <- rlm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type, data=car_nonEx.new)
+wts <- 1/fitted(lm(abs(residuals(Weighted_fit)) ~ fitted(Weighted_fit)))^2
+
+Weighted_fit1 <- rlm(log(MSRP)~Year+(Engine.HP)^2+Transmission.Type+Driven_Wheels+Vehicle.Size+Engine.Fuel.Type, data=car_nonEx.new, weights = wts)
+
+
+```
+
+Given the huge disparity between Train RMSE and Test RMSE, it seems the model overfit the data. But how come?
+
+
+
+
+This section is complete do not mess with it.
+
+#Complex model section
+
+
+Feature engineering: Model currently has 811 levels and random forest wants a maximum of 32. 
+It turns out most levels have 1 to 10 observations. These are too few so I will collapse these levels and rename them.
+
+```{r}
+
+#Grouped plot
+# Most levels have less than 50 observations.
+model.count3 = car_nonEx.new %>% 
+  group_by(Model) %>% 
+  summarise(count=n())
+attach(model.count3)
+
+
+ 
+
+#Most of the model recorded has less than 25 observations
+
+  
+model.25 = model.count3 %>% filter(model.count3$count<25)
+model.25$Model = as.character(model.25$Model)
+
+
+#View the new distribution
+boxplot(model.count3$count, data=model.count3)
+boxplot(model.25$count, data=model.25, main = "model<25")
+
+#Recode the model variables that have low counts. Threshold of 25 counts (observations) is used here)
+
+car_nonEx.New2 <- car_nonEx.new %>%
+  mutate(Model_recode = as.character(Model))
+
+car_nonEx.New2 <- car_nonEx.New2 %>% 
+  mutate(Model_recode = ifelse(Model_recode %in% as.character(model.25$Model), "Model<25", Model_recode)
+         )
+
+car_nonEx.New2 <- car_nonEx.New2 %>% 
+  mutate(Model_recode = as.factor(Model_recode)
+         )
+unique(car_nonEx.New2$Model_recode)
+
+
+
+
+#model.count3$Model_recode.new = model.count$Model[model.count$count < 30] = "Model<25"
+
+model.25more = model.count3 %>% filter(model.count3$count>25)
+boxplot(model.25more$count, data=model.25more, main = "model>25")
+
+#Model factor has now ben reduced from 810 levels to 99 levels. More work needs to be done though.
+
+
+
+```
+
+
+
+
+
+```{r}
+#Remove columns that had been recoded
+car_nonEx.New2 = subset(car_nonEx.New2, select=-c(Veh.Style_recode1, Model, Popularity))
+
+#re-order column to make response the last column.
+car_nonEx.New2b = car_nonEx.New2[,c(1,15,14,2,3,4:13)]
+
+
+#verify the result
+ncol(car_nonEx.New2b)
+str(car_nonEx.New2b)
+```
+
+
+
+
+```{r}
+#Grouped plot for Make
+# Most levels have less than 400 observations.
+#remove the Make with fewer than 60 observations.
+make.count = car_nonEx.New2b %>% 
+  group_by(Make) %>% 
+  summarise(count=n())
+
+#filter for Make level that has less than 80obs
+
+
+
+make.60 = make.count %>% filter(make.count$count<60)
+make.60 = as.character(make.60$Make) #the next set of recode steps worked better with as.character then as.factor steps.
+
+make.60less= c("Alfa Romeo", "Aston Martin", "FIAT", "Genesis", "HUMMER", "Lotus", "Maserati", "Oldsmobile", "Plymouth")
+car_nonEx.New2b <- car_nonEx.New2b %>%
+  mutate(Make_recode = as.character(Make))
+
+car_nonEx.New2b <- car_nonEx.New2b %>% 
+  mutate(Make_recode = ifelse(Make_recode %in% make.60less, "Make<60", Make_recode)
+         )
+
+car_nonEx.New2b <- car_nonEx.New2b %>% 
+  mutate(Make_recode = as.factor(Make_recode)
+         )
+
+
+
+
+
+ 
+boxplot(make.count$count, data=make.count, main = "make")
+boxplot(model.25$count, data=model.25, main = "model<25")
+
+
+
+#Ensure MSRP is last column and remove make since it has now ben recoded.
+
+
+car_nonEx.New3b = subset(car_nonEx.New2b, select=-c(Make))
+
+#re-order column to make response the last column.
+car_nonEx.New3b = car_nonEx.New3b[,c(15,1,2,3,4:14)]
+
+#verify the result
+ncol(car_nonEx.New3b)
+str(car_nonEx.New3b)
+
+#Result: MSRP in last column we have only Model currently as 99 levels that need to be reduced further. I will use Lasso to reduce them.
+```
+
+
+##adjust MSRP-HP relationship.
+##Scale if needed
+```{r}
+
+car_nonEx.New3b = car_nonEx.New3b %>%
+  mutate(MSRP.log = log(MSRP))  #Transform MSRP to log MSRP and remove MSRP
+
+car_nonEx.New3b = subset(car_nonEx.New3b, select=-c(MSRP))
+
+#following lasso result of best lambdas on the full data set, remove Model_recode predictor factor
+#This was done backwards. I did lasso on full data set and came back here to remove the variable prior to the train test split. I also did lasso on the train and test sets as well
+
+car_nonEx.new4 = subset(car_nonEx.New3b, select=-c(Model_recode)) #not factors with >31 levels
+car_nonEx.new4 =car_nonEx.new4 %>%
+  mutate(Year = as.factor(Year)) #Year was being treated as continuous when it was not. It is an ordinal variable.
+
+
+```
+
+
+
+Par down variables using lasso to select variables
+
+#Split section for complex model using the refined data set.
+
+```{r}
+
+attach(car_nonEx.new4)
+
+
+
+set.seed(123)
+splitPerc = .80
+splitPerc2 = .50
+trainIndices = sample(1:dim(car_nonEx.new4)[1],round(splitPerc * dim(car_nonEx.new4)[1]))
+train = car_nonEx.new4[trainIndices,]
+test_val = car_nonEx.new4[-trainIndices,]
+
+trainIndices1 = sample(1:dim(test_val)[1],round(splitPerc2 * dim(test_val)[1]))
+test = test_val[trainIndices1,]
+validation = test_val[-trainIndices1,]
+dim(car_nonEx.new4)
+dim(train)
+dim(test)
+dim(validation)
+```
+
+
+
+
+
+
+Search for the best lambdas used to shrink predictors.
+```{r}
+#10^10 to 10^-2
+grid = 10^seq(10, -2, length = 100)
+
+```
+
+
+Convert to train-test suitable for lasso regression
+```{r}
+
+
+x_train = model.matrix(MSRP.log~., train)[,-1]
+x_test = model.matrix(MSRP.log~., test)[,-1]
+
+y_train = train %>%
+  dplyr::select(MSRP.log) %>%
+  unlist() %>%
+  as.numeric()
+
+y_test = test %>%
+  dplyr::select(MSRP.log) %>%
+  unlist() %>%
+  as.numeric()
+```
+
+
+Next we fit a lasso regression model on the training set, and evaluate its RMSE on the test set.
+
+We expect the coefficient estimates to be much smaller, in terms of  l2  norm, when a large value of  λ  is used, as compared to when a small value of  λ  is used.
+```{r}
+
+library(glmnet)
+lasso_mod = glmnet(x_train, 
+                   y_train, 
+                   alpha = 1, 
+                   lambda = grid) # Fit lasso model on training data
+par(mfrow=c(1,1))
+plot(lasso_mod)    # Draw plot of coefficients
+```
+
+
+
+```{r}
+
+#Snooping on the results of the lambdas
+
+lasso_mod$lambda[100] #Display 100th lambda value
+coef(lasso_mod)[,100] # Display coefficients associated with 100th lambda value
+sqrt(sum(coef(lasso_mod)[-1,100]^2)) # Calculate l1 norm. sqrt of l2 norm, right?
+```
+
+
+
+
+Notice that in the coefficient plot that depending on the choice of tuning parameter, some of the coefficients are exactly equal to zero. 
+
+Therefore, we use cross-validation to choose the tuning parameter  λ . We can do this using the built-in cross-validation function, cv.glmnet(). By default, the function performs 10-fold cross-validation, though this can be changed using the argument folds. Note that we set a random seed first so our results will be reproducible, since the choice of the cross-validation folds is random.
+
+```{r}
+set.seed(123)
+cv.out = cv.glmnet(x_train, y_train, alpha = 1) # Fit lasso model on training data
+
+
+plot(cv.out) # Draw plot of training MSE as a function of lambda. At the elbow, my best lambda to minimize MSE is at log(-5ish)
+
+
+bestlam = cv.out$lambda.min # Select lamda that minimizes training MSE
+lasso_pred = predict(lasso_mod, s = bestlam, newx = x_test) # Use best lambda to predict test data
+RMSE.lasso = sqrt(mean((lasso_pred - y_test)^2)) # Calculate test RMSE = #0.175
+
+R_Squared =  1 - cv.out$cvm/var(y_train)
+max(R_Squared) #= 0.864
+max(cv.out$glmnet.fit$dev.ratio) #= 0.88. good enough. The model can explain 88% of variation in my dataset. I used corss validation so this should be good with test set.
+```
+
+
+
+```{r}
+x = model.matrix(MSRP.log~., car_nonEx.new4)[,-15] # trim off the first column
+                                         # leaving only the predictors
+y = car_nonEx.new4 %>%
+  dplyr::select(MSRP.log) %>%
+  unlist() %>%
+  as.numeric()   #Vector for the target variable.
+
+```
+
+
+
+Here we see the number of coefficient estimates are exactly zero:
+
+```{r}
+out = glmnet(x, y, alpha = 1, lambda = grid) # Fit lasso model on full dataset
+lasso_coef = predict(out, type = "coefficients", s = bestlam)[1:100,] # Display coefficients using lambda chosen by CV
+
+```
+
+Selecting only the predictors with non-zero coefficients, we see that the lasso model with  λ  chosen by cross-validation contains only 54 variables:
+```{r}
+length(lasso_coef)
+length(lasso_coef[lasso_coef != 0]) # Display only non-zero coefficients
+#When 100 best was given, i got lasso_coef = 54
+
+
+plot(lasso_coef[lasso_coef != 0]) # Display only non-zero coefficients
+
+lasso_coef[lasso_coef != 0]
+good.lasso = cbind(lasso_coef[lasso_coef != 0])# Display only non-zero coefficients
+good.lasso
+
+#Write the result to a csv file for manipulation and view the result.
+
+("C:/Users/olani/OneDrive/Documents/Data Science/SMU-Data Science/Applied Statistics/Project1Details_2021/Project1Details_2021")
+
+
+
+write.csv(good.lasso, "C:/Users/olani/OneDrive/Documents/Data Science/SMU-Data Science/Applied Statistics/Project1Details_2021/Project1Details_2021/goodlasso.csv")
+
+goodlassos = read.csv("goodlasso_names.csv")
+attach(goodlassos)
+str(goodlassos)
+
+```
+
+
+
+Lasso worked great. it lowered RMSE for regression a lot.
+
+#Following feature engineering. We have a good dataset for tree.
+
+###Decision trees model
+
+```{r}
+
+library(tree)
+set.seed(123)
+#Decision tree
+car.new_tree2 <- tree(MSRP.log~., data=train)
+
+```
+
+
+
+```{r}
+#Let us see the model
+summary(car.new_tree2)
+plot(car.new_tree2)
+text(car.new_tree2, pretty=0)
+
+#Let us check if we need to prune the tree?
+
+cv_car.new_tree2 = cv.tree(car.new_tree2)
+plot(cv_car.new_tree2$size, cv_car.new_tree2$dev, type = 'b') #significant best is 10-node tree
+
+
+#Yes we need to prune to the best 10
+prune.car.new_tree2 = prune.tree(car.new_tree2, best=10) 
+plot(prune.car.new_tree2)
+text(prune.car.new_tree2, pretty=0)
+
+
+#let's use the pruned tree to make prediction
+#prediction
+car_pred_new2 <- predict(prune.car.new_tree2, newdata = test)
+
+
+
+ggplot() + 
+    geom_point(aes(x = test$MSRP, y = car_pred_new2)) +
+    geom_abline()
+
+#The plot above shows the predicted value is correlated well with actual MSRP which is a good thing. But the association is much better for lower MSRP.
+
+
+Root_MSE_3 = sqrt(mean((car_pred_new2 - test$MSRP)^2)) #test RMSE at  9317 which is lower than the one obtained for linear model test RMSE.
+
+```
+
+
+
+```{r}
+
+
+plot(prune.car.new_tree2)
+text(prune.car.new_tree2, pretty=0)
+
+```
+
+
+###Random Forest model
+
+#1000 or more decision tree working together whereby majority decision is used to determine the value of the response.
+
+```{r}
+library(randomForest)
+set.seed(123)  
+car_new.rT <- randomForest(MSRP.log~., data=train, importance =TRUE, mtry=9, ntree=1000)
+
+car_pred <- predict(car_new.rT, newdata = test)
+
+ggplot() + 
+    geom_point(aes(x = test$MSRP.log, y = car_pred)) +
+    geom_abline()
+
+#The plot above offers the best correlation between predicted MSRP and actual MSRP.Looks very strong.
+
+Root_MSE_4 = sqrt(mean((car_pred-test$MSRP.log)^2)) #test RMSE at 4559 is half of that from decision tree which is very very nice.Try change ntree to 4000 and obtain the RMSE
+
+summary(car_pred)
+importance (car_new.rT)
+
+
+```
+
+#tabulating the errors
+```{r}
+
+RMSE = c(Root_MSE, Root_MSE_B,  Root_MSE_B1, Root_MSE_2.train, Root_MSE_2.test, RMSE.lasso,  Root_MSE_3, Root_MSE_4)
+Model_type = c("Best8_Linear Full", "Best6_Linear Full", "Weighted_Linear Full", "Best6_Linear Train", "Best6_Linear Test","Lasso_test RMSE", "Single Tree_pruned", "Random Forest")
+
+RMSE_car = cbind(Model_type, RMSE)
+
+RMSE_car
+
+```
+
+
+
+John's story ends here
+
+
